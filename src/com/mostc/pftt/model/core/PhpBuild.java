@@ -23,6 +23,7 @@ import com.mostc.pftt.results.ConsoleManager;
 import com.mostc.pftt.results.EPrintType;
 import com.mostc.pftt.scenario.FileSystemScenario;
 import com.mostc.pftt.scenario.LocalFileSystemScenario;
+import com.mostc.pftt.util.HostEnvUtil;
 import com.mostc.pftt.util.StringUtil2;
 
 /** Represents a single build of PHP.
@@ -47,7 +48,7 @@ public class PhpBuild extends SAPIManager {
 	private int major, minor, release;
 	
 	public PhpBuild(String build_path) {
-		this.build_path = new File(build_path).getAbsolutePath();
+		this.build_path = new File(build_path).getAbsolutePath().toLowerCase();
 		ext_enable_map = new WeakHashMap<PhpIni,WeakHashMap<String,Boolean>>(3);
 		ext_available_map = new WeakHashMap<PhpIni,String[]>(3);
 	}
@@ -113,7 +114,7 @@ public class PhpBuild extends SAPIManager {
 	 */
 	public EBuildSourceType getBuildSourceType(Host host) {
 		// '-dev-' means that its a build the user made themselves
-		if (build_path.toLowerCase().contains("-dev-"))
+		if (version_str.contains("dev"))
 			return EBuildSourceType.SELF;
 		else
 			return EBuildSourceType.WINDOWS_DOT_PHP_DOT_NET;
@@ -126,9 +127,8 @@ public class PhpBuild extends SAPIManager {
 	 * @return
 	 */
 	public ECompiler getCompiler(ConsoleManager cm, Host host) {
-		String n = FileSystemScenario.basename(build_path).toLowerCase();
 		for (ECompiler c : ECompiler.values() ) {
-			if (n.contains(c.toString().toLowerCase()))
+			if (build_path.contains(c.toString().toLowerCase()))
 				return c;
 		}
 		return null;
@@ -157,7 +157,7 @@ public class PhpBuild extends SAPIManager {
 	public EBuildType getBuildType(Host host) {
 		if (host.isWindows()) {
 			// '-nts-' means its an NTS build
-			if (build_path.toLowerCase().contains("-nts-")) 
+			if (build_path.contains("nts")) 
 				return EBuildType.NTS;
 			else
 				// has '-ts-' on TS snapshot builds, but doesn't have '-ts-' on release builds
@@ -417,7 +417,7 @@ public class PhpBuild extends SAPIManager {
 		if (version_str!=null) {
 			return version_str;
 		}
-		String b = FileSystemScenario.basename(build_path).toLowerCase();
+		String b = FileSystemScenario.basename(build_path);
 		
 		// naming convention php-5.3-[optionally ts|nts]-[compiler]-[optionally rNNNNNNN]
 		if (b.contains("php-5.3")) {
@@ -470,93 +470,101 @@ public class PhpBuild extends SAPIManager {
 		// should be able to get this info for release, qa and snapshot builds
 		// but for dev builds, might not be able to get this info any other way than parsing phpinfo
 		if (host instanceof AHost && branch != EBuildBranch.PHP_Master) {
-			for (String line : StringUtil.splitLines(getPhpInfo(cm, (AHost)host))) {
-				if (line.startsWith("PHP Version =>")) {
-					version_str = line.substring("PHP Version => ".length());
-					
-					String[] split = version_str.split("[\\.|\\-]");
-					try {
-						major = Integer.parseInt(split[0]);
-						minor = Integer.parseInt(split[1]);
-					} catch ( NumberFormatException ex ) {
-						// guess
-						major = 7;
-						minor = 3;
+			String phpinfo = getPhpInfo(cm, (AHost)host);
+			if(phpinfo != null)
+			{
+				for (String line : StringUtil.splitLines(phpinfo)) {
+					if (line.startsWith("PHP Version =>")) {
+						version_str = line.substring("PHP Version => ".length()).toLowerCase();
+						break;
 					}
-					//
-					if (revision==null)
-						revision = version_str;
-					if (split.length>3&&!split[3].equalsIgnoreCase("dev"))
-						revision = split[2];
-					//
-					if (major==5) {
-						switch(minor) {
-						case 3:
-							branch  = EBuildBranch.PHP_5_3;
-							break;
-						case 4:
-							branch  = EBuildBranch.PHP_5_4;
-							break;
-						case 5:
-							branch  = EBuildBranch.PHP_5_5;
-							break;
-						case 6:
-							branch  = EBuildBranch.PHP_5_6;
-							break;
-						}
-					} else if (major == 7) {
-						switch(minor) {
-						case 0:
-							branch  = EBuildBranch.PHP_7_0;
-							break;
-						case 1:
-							branch  = EBuildBranch.PHP_7_1;
-							break;
-						case 2:
-							branch  = EBuildBranch.PHP_7_2;
-							break;
-						case 3:
-							branch  = EBuildBranch.PHP_7_3;
-							break;
-						case 4:
-							branch  = EBuildBranch.PHP_7_4;
-							break;
-						}
-					} else if (major == 8) {
-						switch(minor) {
-						case 0:
-							branch  = EBuildBranch.PHP_8_0;
-							break;
-						}
-					}
-					
+				}
+			}
+			else
+			{
+				// get version string from production version of the php.exe file
+				version_str = HostEnvUtil.getProductVersion(getPhpExe()).toLowerCase();
+			}
+			
+			String[] split = version_str.split("[\\.|\\-]");
+			try {
+				major = Integer.parseInt(split[0]);
+				minor = Integer.parseInt(split[1]);
+			} catch ( NumberFormatException ex ) {
+				// guess
+				major = 7;
+				minor = 3;
+			}
+			//
+			if (revision==null)
+				revision = version_str;
+			if (split.length>3&&!split[3].equalsIgnoreCase("dev"))
+				revision = split[2];
+			//
+			if (major==5) {
+				switch(minor) {
+				case 3:
+					branch  = EBuildBranch.PHP_5_3;
+					break;
+				case 4:
+					branch  = EBuildBranch.PHP_5_4;
+					break;
+				case 5:
+					branch  = EBuildBranch.PHP_5_5;
+					break;
+				case 6:
+					branch  = EBuildBranch.PHP_5_6;
+					break;
+				}
+			} else if (major == 7) {
+				switch(minor) {
+				case 0:
+					branch  = EBuildBranch.PHP_7_0;
+					break;
+				case 1:
+					branch  = EBuildBranch.PHP_7_1;
+					break;
+				case 2:
+					branch  = EBuildBranch.PHP_7_2;
+					break;
+				case 3:
+					branch  = EBuildBranch.PHP_7_3;
+					break;
+				case 4:
+					branch  = EBuildBranch.PHP_7_4;
+					break;
+				}
+			} else if (major == 8) {
+				switch(minor) {
+				case 0:
+					branch  = EBuildBranch.PHP_8_0;
 					break;
 				}
 			}
-		}
-		if (revision!=null) {
-			if (revision.startsWith("r")) {
-				try {
-					release = Integer.parseInt(revision.substring(1), 16);
-				} catch ( NumberFormatException ex ) {
-					release = 0; // clarity
-				}
-			} else if (revision.contains(".")) {
-				String[] parts = revision.split("\\.");
-				if (parts.length==3) {
-					// 5.4.14*
-					String a = parts[2].toLowerCase();
-					if (a.contains("rc")) {
-						// 5.4.14rc1
-						a = a.substring(0, a.indexOf("rc"));
-					} else if (a.contains("beta")) {
-						// 5.5.0beta3
-						a = a.substring(0, a.indexOf("beta"));
-					}
+			if (revision!=null) {
+				if (revision.startsWith("r")) {
 					try {
-						release = Integer.parseInt(a);
+						release = Integer.parseInt(revision.substring(1), 16);
 					} catch ( NumberFormatException ex ) {
 						release = 0; // clarity
+					}
+				} else if (revision.contains(".")) {
+					String[] parts = revision.split("\\.");
+					if (parts.length==3) {
+						// 5.4.14*
+						String a = parts[2].toLowerCase();
+						if (a.contains("rc")) {
+							// 5.4.14rc1
+							a = a.substring(0, a.indexOf("rc"));
+						} else if (a.contains("beta")) {
+							// 5.5.0beta3
+							a = a.substring(0, a.indexOf("beta"));
+						}
+						try {
+							release = Integer.parseInt(a);
+						} catch ( NumberFormatException ex ) {
+							release = 0; // clarity
+						}
 					}
 				}
 			}
@@ -776,7 +784,7 @@ public class PhpBuild extends SAPIManager {
 	}
 	
 	public String getPhpInfo(ConsoleManager cm, PhpIni ini, AHost host) throws Exception {
-		String php_info;
+		String php_info = null;
 		if (this.php_info != null) {
 			php_info = this.php_info.get();
 			if (php_info != null)
@@ -784,10 +792,13 @@ public class PhpBuild extends SAPIManager {
 		}
 		
 		PHPOutput eo = eval(host, ini, "phpinfo();");
-		eo.printOutputIfCrash(FileSystemScenario.toContext(getClass(), "getPhpInfo"), cm);
-		php_info = eo.output;
-		eo.cleanup(host);
-		this.php_info = new SoftReference<String>(php_info);
+		//eo.printOutputIfCrash(FileSystemScenario.toContext(getClass(), "getPhpInfo"), cm);
+		if(!eo.isCrashed())
+		{
+			php_info = eo.output;
+			eo.cleanup(host);
+			this.php_info = new SoftReference<String>(php_info);
+		}
 		return php_info;
 	}
 	

@@ -4,6 +4,11 @@ import java.io.File;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+
+import org.apache.commons.lang.ArrayUtils;
+import org.apache.commons.lang.StringUtils;
+
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 
 import com.github.mattficken.io.StringUtil;
@@ -20,6 +25,8 @@ import com.sun.corba.se.impl.orbutil.closure.Future;
 import com.sun.jna.Memory;
 import com.sun.jna.Pointer;
 import com.sun.jna.platform.win32.VerRsrc.VS_FIXEDFILEINFO;
+import com.sun.jna.platform.win32.Version;
+import com.sun.jna.platform.win32.WinDef.DWORD;
 import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.PointerByReference;
 
@@ -197,14 +204,11 @@ public final class HostEnvUtil {
 			// share PHP-SDK over network. this also will share C$, G$, etc...
 			//host.execElevated(cm, HostEnvUtil.class, "NET SHARE PHP_SDK="+host.getJobWorkDir()+" /Grant:"+host.getUsername()+",Full", AHost.ONE_MINUTE);
 		}
-		installVCRuntime(fs, host, cm, build);
-		
-		installAndConfigureMySql(fs, host, cm);
 		
 		cm.println(EPrintType.COMPLETED_OPERATION, HostEnvUtil.class, "Windows host prepared to run PHP.");
 	} // end public static void prepareWindows
 	
-	private static void installAndConfigureMySql(FileSystemScenario fs, AHost host, ConsoleManager cm) throws IllegalStateException, IOException, Exception {
+	private static void installAndConfigureMySQL5(FileSystemScenario fs, AHost host, ConsoleManager cm) throws IllegalStateException, IOException, Exception {
 		
 		// install depended VC12 first
 		// opted out VC12 x64 since we only install x86 version of MySql
@@ -298,7 +302,7 @@ public final class HostEnvUtil {
 	 * @throws IOException 
 	 * @throws IllegalStateException 
 	 */
-	public static void installVCRuntime(FileSystemScenario fs, AHost host, ConsoleManager cm, PhpBuild build) throws IllegalStateException, IOException, Exception {
+	public static void installVCRuntimeByBuild(FileSystemScenario fs, AHost host, ConsoleManager cm, PhpBuild build) throws IllegalStateException, IOException, Exception {
 		if (!host.isWindows()) {
 			return;
 		}
@@ -313,7 +317,7 @@ public final class HostEnvUtil {
 			// Install the x64 redist first, THEN the x86.
 			// Discussion indicates some x64 redist may delete x86 redist registry entry
 			// but x86 redist always add its own
-			if (build.isX64() && host.isX64()) {
+			if (host.isX64()) {
 				installVCRT(cm, fs, host, "VC10 x64", File_VC10_Redist_X64, Sys_Dll_VC10_Redist_X64);
 				installVCRT(cm, fs, host, "VC11 x64", File_VC11_Redist_X64, Sys_Dll_VC11_Redist_X64);
 			}
@@ -322,23 +326,13 @@ public final class HostEnvUtil {
 			break;
 		case PHP_7_0:
 		case PHP_7_1:
-			if (build.isX64() && host.isX64()) {
-				installVCRT14(cm, fs, host, "VC14 x64", File_VC14_Redist_X64, Sys_Dll_VC14Plus_Redist_X64);
-			}
-			installVCRT14(cm, fs, host, "VC14 x86", File_VC14_Redist_X86, Sys_Dll_VC14Plus_Redist_X86);
-			break;
 		case PHP_7_2:
 		case PHP_7_3:
-			if (build.isX64() && host.isX64()) {
-				installVCRT15(cm, fs, host, "VC15 x64", File_VC15_Redist_X64, Sys_Dll_VC14Plus_Redist_X64);
-			}
-			installVCRT15(cm, fs, host, "VC15 x86", File_VC15_Redist_X86, Sys_Dll_VC14Plus_Redist_X86);
-			break;
 		case PHP_7_4:
 		case PHP_8_0:
 		case PHP_Master:
 		default:
-			if (build.isX64() && host.isX64()) {
+			if (host.isX64()) {
 				installVCRT16(cm, fs, host, "VS16 x64", File_VS16_Redist_X64, Sys_Dll_VC14Plus_Redist_X64);
 			}
 			installVCRT16(cm, fs, host, "VS16 x86", File_VS16_Redist_X86, Sys_Dll_VC14Plus_Redist_X86);
@@ -415,7 +409,7 @@ public final class HostEnvUtil {
 			return false;
 		}
 		
-		int[] fileVersion = getVC14Version(fs, dllFile);
+		int[] fileVersion = getFileVersion(dllFile);
 		if(fileVersion.length != 4)
 		{
 			return false;
@@ -433,7 +427,7 @@ public final class HostEnvUtil {
 			return false;
 		}
 		
-		int[] fileVersion = getVC14Version(fs, dllFile);
+		int[] fileVersion = getFileVersion(dllFile);
 		if(fileVersion.length != 4)
 		{
 			return false;
@@ -451,7 +445,7 @@ public final class HostEnvUtil {
 			return false;
 		}
 		
-		int[] fileVersion = getVC14Version(fs, dllFile);
+		int[] fileVersion = getFileVersion(dllFile);
 		if(fileVersion.length != 4)
 		{
 			return false;
@@ -460,13 +454,13 @@ public final class HostEnvUtil {
         // VC16 Runtime dll file version: 14.20.27508.1
 		return fileVersion[0] == 14 && fileVersion[1] >= 20;
 	}
-
-	// checking if VCRT15 is installed by existing of the vcruntime140.dll and the file version
-	private static int[] getVC14Version(FileSystemScenario fs, String dllFile)
+	
+	public static int[] getFileVersion(String filePath)
 	{
-		if(!fs.exists(dllFile))
+		File file = new File(filePath);
+		if(!file.exists())
 		{
-			return new int[0];
+			return null;
 		}
 		
         IntByReference dwDummy = new IntByReference();
@@ -474,33 +468,107 @@ public final class HostEnvUtil {
 
         int versionlength =
                 com.sun.jna.platform.win32.Version.INSTANCE.GetFileVersionInfoSize(
-                		dllFile, dwDummy);
+                		filePath, dwDummy);
 
         byte[] bufferarray = new byte[versionlength];
         Pointer lpData = new Memory(bufferarray.length);
-        PointerByReference lplpBuffer = new PointerByReference();
-        IntByReference puLen = new IntByReference();
-
         boolean fileInfoResult =
                 com.sun.jna.platform.win32.Version.INSTANCE.GetFileVersionInfo(
-                		dllFile, 0, versionlength, lpData);
+                		filePath, 0, versionlength, lpData);
 
-        boolean verQueryVal =
-                com.sun.jna.platform.win32.Version.INSTANCE.VerQueryValue(
-                        lpData, "\\", lplpBuffer, puLen);
+        if(fileInfoResult)
+        {
+	        PointerByReference buffer = new PointerByReference();
+	        IntByReference puLen = new IntByReference();
+	        boolean verQueryVal =
+	                com.sun.jna.platform.win32.Version.INSTANCE.VerQueryValue(
+	                        lpData, "\\", buffer, puLen);
+	        if(verQueryVal)
+	        {
+		        VS_FIXEDFILEINFO fileInfo = new VS_FIXEDFILEINFO(buffer.getValue());
+		        fileInfo.read();
 
-        VS_FIXEDFILEINFO lplpBufStructure = new VS_FIXEDFILEINFO(lplpBuffer.getValue());
-        lplpBufStructure.read();
+		        int v1 = (fileInfo.dwFileVersionMS).intValue() >> 16;
+		        int v2 = (fileInfo.dwFileVersionMS).intValue() & 0xffff;
+		        int v3 = (fileInfo.dwFileVersionLS).intValue() >> 16;
+		        int v4 = (fileInfo.dwFileVersionLS).intValue() & 0xffff;
+
+		        return new int[] {v1, v2, v3, v4};
+	        }
+        }
         
-        int v1 = (lplpBufStructure.dwFileVersionMS).intValue() >> 16;
-        int v2 = (lplpBufStructure.dwFileVersionMS).intValue() & 0xffff;
-        int v3 = (lplpBufStructure.dwFileVersionLS).intValue() >> 16;
-        int v4 = (lplpBufStructure.dwFileVersionLS).intValue() & 0xffff;
-
-        return new int[] {v1, v2, v3, v4};
+        return null;
 	}
-	
-	
+
+	public static String getProductVersion(String filePath)
+	{
+		File file = new File(filePath);
+		if(!file.exists())
+		{
+			return null;
+		}
+		
+        IntByReference dwDummy = new IntByReference();
+        dwDummy.setValue(0);
+
+        int versionlength =
+                com.sun.jna.platform.win32.Version.INSTANCE.GetFileVersionInfoSize(
+                		filePath, dwDummy);
+        
+        byte[] bufferarray = new byte[versionlength];
+        Pointer lpData = new Memory(bufferarray.length);
+        
+        boolean fileInfoResult =
+                com.sun.jna.platform.win32.Version.INSTANCE.GetFileVersionInfo(
+                		filePath, 0, versionlength, lpData);
+
+        if(fileInfoResult)
+        {
+	        // creates a (reference) pointer
+	        PointerByReference lpTranslate = new PointerByReference();
+	        IntByReference cbTranslate = new IntByReference();
+	        // Read the list of languages and code pages
+	        boolean verQueryTranslateVal = com.sun.jna.platform.win32.Version.INSTANCE.VerQueryValue(
+	            lpData, "\\VarFileInfo\\Translation", lpTranslate, cbTranslate);
+	        
+	        if (verQueryTranslateVal)
+	        {
+	        	int cbTranslateVal = cbTranslate.getValue();
+	        	for (int i=0; i < (cbTranslateVal/4); i++)
+	            {
+	        		Pointer pTranslate = lpTranslate.getValue();
+	        		short language = pTranslate.getShort(0);
+	        		short codePage = pTranslate.getShort(2);
+	        		String lang = String.format("%04x", language);
+	                String cp = String.format("%04x",codePage);
+	                StringBuilder subBlock = new StringBuilder();
+	                subBlock.append("\\StringFileInfo\\");
+	                subBlock.append(lang);
+	                subBlock.append(cp);
+	                subBlock.append("\\");
+	                subBlock.append("ProductVersion");
+	                PointerByReference lpBuffer = new PointerByReference();
+	                IntByReference dwBytes = new IntByReference();
+	                    
+	                // Retrieve file description for language and code page "i"
+	                boolean verQueryVerStrVal = Version.INSTANCE.VerQueryValue(
+	                    lpData, subBlock.toString(), lpBuffer, dwBytes);
+	                
+	                if(verQueryVerStrVal)
+	                {
+		                byte[] description = 
+		                        lpBuffer.getValue().getByteArray(0, (dwBytes.getValue()-1)*2);
+		
+		                String sectionVal = new String(description, StandardCharsets.UTF_16LE);
+		                return sectionVal;
+	                }
+	            }
+	        }
+        }
+        
+        return null;
+	}
+    
 	protected static void doInstallVCRT(ConsoleManager cm, FileSystemScenario fs, AHost host, String name, String installerFile) throws IllegalStateException, IOException, Exception {
 		
 		String remote_file = installerFile;
@@ -586,12 +654,16 @@ public final class HostEnvUtil {
 
 		downloadVCRuntimeByBuild(fs, host, cm, build);
 		
-		downloadMySQL5(fs, host, cm);
+		downloadMySQL5AndDependencies(fs, host, cm);
+
+		installVCRuntimeByBuild(fs, host, cm, build);
+		
+		installAndConfigureMySQL5(fs, host, cm);
 		
 		cm.println(EPrintType.COMPLETED_OPERATION, HostEnvUtil.class, "Windows host setup to run PHP.");
 	}
 	
-	private static void downloadMySQL5(FileSystemScenario fs, LocalHost host, LocalConsoleManager cm) {
+	private static void downloadMySQL5AndDependencies(FileSystemScenario fs, LocalHost host, LocalConsoleManager cm) {
 
 		// always download dependency - VC12
 		String system_dir = host.getSystemRoot();
@@ -607,6 +679,7 @@ public final class HostEnvUtil {
 		{
 			// download MySQL and unzip 
 			createDirectoryIfNotExists(fs, cm, Dir_Mysql);
+			cm.println(EPrintType.IN_PROGRESS, HostEnvUtil.class, "Downloading from ["+Link_Mysql_Win32_5_7_25+"] and unzip to ["+Dir_Mysql+"]");
 			DownloadUtil.downloadAndUnzip(cm, host, Link_Mysql_Win32_5_7_25, Dir_Mysql);
 		}
 		else
@@ -637,31 +710,21 @@ public final class HostEnvUtil {
 		case PHP_5_6:
 			downloadVCRuntime(fs, cm, "VC10 x86", Link_VC10_Redist_X86, File_VC10_Redist_X86, system_dir + Sys_Dll_VC10_Redist_X86);
 			downloadVCRuntime(fs, cm, "VC11 x86", Link_VC11_Redist_X86, File_VC11_Redist_X86, system_dir + Sys_Dll_VC11_Redist_X86);
-			if (build.isX64() && host.isX64()) {
+			if (host.isX64()) {
 				downloadVCRuntime(fs, cm, "VC10 x64", Link_VC10_Redist_X64, File_VC10_Redist_X64, system_dir + Sys_Dll_VC10_Redist_X64);
 				downloadVCRuntime(fs, cm, "VC11 x64", Link_VC11_Redist_X64, File_VC11_Redist_X64, system_dir + Sys_Dll_VC11_Redist_X64);
 			}
 			break;
 		case PHP_7_0:
 		case PHP_7_1:
-			downloadVC14Runtime(fs, cm, "VC14 x86", Link_VC14_Redist_X86, File_VC14_Redist_X86, system_dir + Sys_Dll_VC14Plus_Redist_X86);
-			if (build.isX64() && host.isX64()) {
-				downloadVC14Runtime(fs, cm, "VC14 x64", Link_VC14_Redist_X64, File_VC14_Redist_X64, system_dir + Sys_Dll_VC14Plus_Redist_X64);
-			}
-			break;
 		case PHP_7_2:
 		case PHP_7_3:
-			downloadVC15Runtime(fs, cm, "VC15 x86", Link_VC15_Redist_X86, File_VC15_Redist_X86, system_dir + Sys_Dll_VC14Plus_Redist_X86);
-			if (build.isX64() && host.isX64()) {
-				downloadVC15Runtime(fs, cm, "VC15 x64", Link_VC15_Redist_X64, File_VC15_Redist_X64, system_dir + Sys_Dll_VC14Plus_Redist_X64);
-			}
-			break;
 		case PHP_7_4:
 		case PHP_8_0:
 		case PHP_Master:
 		default:
 			downloadVC16Runtime(fs, cm, "VS16 x86", Link_VS16_Redist_X86, File_VS16_Redist_X86, system_dir + Sys_Dll_VC14Plus_Redist_X86);
-			if (build.isX64() && host.isX64()) {
+			if (host.isX64()) {
 				downloadVC16Runtime(fs, cm, "VS16 x64", Link_VS16_Redist_X64, File_VS16_Redist_X64, system_dir + Sys_Dll_VC14Plus_Redist_X64);
 			}
 			break;
